@@ -1,5 +1,5 @@
 qm = require('qminer')
-loader = require('qminer-data-loader')
+#loader = require('qminer-data-loader')
 fs = require 'fs'
 
 base = new qm.Base(
@@ -15,16 +15,16 @@ base = new qm.Base(
 )
 
 
-data = ->
-  fs.readFileSync 'dataset.txt', 'utf8'
+# data = ->
+#   fs.readFileSync 'dataset.txt', 'utf8'
 
-data = data();null
-extraction_regex = /([0-9]+) ((![A-Z]+ )+) (.+)/g
-#parsed = extraction_regex.exec(data);null
+# data = data();null
+# extraction_regex = /([0-9]+) ((![A-Z]+ )+) (.+)/g
+# #parsed = extraction_regex.exec(data);null
 
-create_categories = (cats) ->
-  (s.substr(1) for s in cats.split " " when s.length > 0)
-  
+# create_categories = (cats) ->
+#   (s.substr(1) for s in cats.split " " when s.length > 0)
+
 
 # result = []
 # while (match = extraction_regex.exec(data))
@@ -47,4 +47,88 @@ feature_space = new qm.FeatureSpace(base, {
     normalize: true
 })
 
-null
+listAllCategories = (base) ->
+  categories = {}
+  base.store("articles").each((rec) ->
+    for cat in rec.categories
+      if !categories[cat]
+        categories[cat] = 1
+      else
+        categories[cat] += 1)
+
+  categories = ([k, v] for k, v of categories).sort (a, b) -> a[1] - b[1]
+
+# listAllCategories base
+
+# [ [ 'GFAS', 1 ],
+#   [ 'GTOUR', 5 ],
+#   [ 'GOBIT', 5 ],
+#   [ 'GREL', 20 ],
+#   [ 'GODD', 23 ],
+#   [ 'GWELF', 27 ],
+#   [ 'GSCI', 28 ],
+#   [ 'GENT', 41 ],
+#   [ 'GPRO', 44 ],
+#   [ 'MCAT', 46 ],
+#   [ 'GWEA', 46 ],
+#   [ 'GENV', 55 ],
+#   [ 'GHEA', 67 ],
+#   [ 'GDIS', 85 ],
+#   [ 'GDEF', 116 ],
+#   [ 'GVOTE', 119 ],
+#   [ 'GJOB', 158 ],
+#   [ 'GSPO', 178 ],
+#   [ 'CCAT', 205 ],
+#   [ 'GCRIM', 260 ],
+#   [ 'ECAT', 297 ],
+#   [ 'GVIO', 338 ],
+#   [ 'GDIP', 387 ],
+#   [ 'GPOL', 477 ],
+#   [ 'GCAT', 1955 ] ]
+
+# cross validation
+#
+
+makeTrainTestSets = (base, folds) ->
+  l = base.store("articles").allRecords.length
+  testSize = Math.round(l / folds)
+  start = 0
+  end = start + testSize
+  result = []
+  while end < l
+    tr= base.store('articles').allRecords.filter (rec) -> rec.id < start or rec.id >= end
+    test = base.store('articles').allRecords.filterById start, end - 1
+    start = end
+    end += testSize
+    result.push [tr, test]
+  return result
+
+
+makeTarget = (ts, cat) ->
+  target = ts.map((rec) ->
+    if cat in rec.categories
+      1                         #true
+    else
+      0)                        #false
+  return qm.la.Vector(target)
+
+crossValidation = (base, folds, category) ->
+  trainTestSets = makeTrainTestSets base, folds
+  results = {tp: 0, fp: 0, tn: 0, fn: 0}
+  for [ts, vs] in trainTestSets
+    SVC = new qm.analytics.SVC({ c:1, maxTime: 5 })
+    SVC.fit(featureSpace.extractSparseMatrix(ts),
+            makeTarget(ts, category))
+    vs.each((rec) ->
+      sparseVector = featureSpace.extractSparseVector({ text: rec.text })
+      y = SVC.predict(sparseVector)
+      if (category in rec.categories) and y == 1 #true positive
+        results['tp'] += 1
+      else if (category in rec.categories) and y == 0 #false negative
+        results['fn'] += 1
+      else if y == 1            #false positive
+        results['fp'] += 1
+      else                      #true negative
+        results['tn'] += 1
+  return results
+        
