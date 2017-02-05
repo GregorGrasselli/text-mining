@@ -6,46 +6,52 @@ base = new qm.Base(
     mode: 'createClean',
     schema: [
       {name: 'articles',
-      fields: [
+       fields: [
         { name: 'text', type: 'string' },
-        { name: 'id', type: 'float' },
+        { name: 'id', type: 'int' },
+        { name: 'index', primary: true, type: 'int' },
         { name: 'categories', type: 'string_v' }
         ]},
     ]
 )
 
 
-# data = ->
-#   fs.readFileSync 'dataset.txt', 'utf8'
+data = ->
+  fs.readFileSync 'dataset.txt', 'utf8'
 
-# data = data();null
-# extraction_regex = /([0-9]+) ((![A-Z]+ )+) (.+)/g
-# #parsed = extraction_regex.exec(data);null
+data = data();null
+extraction_regex = /([0-9]+) ((![A-Z]+ )+) (.+)/g
+#parsed = extraction_regex.exec(data);null
 
-# create_categories = (cats) ->
-#   (s.substr(1) for s in cats.split " " when s.length > 0)
+create_categories = (cats) ->
+  (s.substr(1) for s in cats.split " " when s.length > 0)
 
 
-# result = []
-# while (match = extraction_regex.exec(data))
-#   result.push {id: match[1], categories: create_categories(match[2]), text: match[match.length - 1]}
+result = []
+index = 0
+while (match = extraction_regex.exec(data))
+  result.push {id: parseInt(match[1]), categories: create_categories(match[2]), text: match[match.length - 1], index: index}
+  ++index
 
-# for i in result
-#   fs.appendFile 'json_lines_dataset.txt', JSON.stringify(i) + "\n", (error) -> console.log("couldn't write " + i)
+fs.unlinkSync('json_lines_dataset.txt')
+for i in result
+  fs.appendFileSync 'json_lines_dataset.txt', JSON.stringify(i) + "\n"
 
-data = base.store("articles").loadJson "json_lines_dataset.txt"
+n_articles = base.store("articles").loadJson "json_lines_dataset.txt"
 
-feature_space = new qm.FeatureSpace(base, {
+feature_space_args = {
     type: 'text', source: 'articles', field: 'text',
     weight: 'tfidf', # none, tf, idf, tfidf
     tokenizer: {
         type: 'simple',
-        stopwords: 'none', # none, en, [...]
-        stemmer: 'none' # porter, none
+        stopwords: 'en', # none, en, [...]
+        stemmer: 'porter' # porter, none
     },
-    ngrams: 1,
+    ngrams: 2,
     normalize: true
-})
+}
+
+feature_space = new qm.FeatureSpace(base, feature_space_args)
 
 listAllCategories = (base) ->
   categories = {}
@@ -89,15 +95,16 @@ listAllCategories = (base) ->
 # cross validation
 #
 
+
 makeTrainTestSets = (base, folds) ->
   l = base.store("articles").allRecords.length
   testSize = Math.round(l / folds)
   start = 0
   end = start + testSize
   result = []
-  while end < l
-    tr= base.store('articles').allRecords.filter (rec) -> rec.id < start or rec.id >= end
-    test = base.store('articles').allRecords.filterById start, end - 1
+  while end <= l
+    tr= base.store('articles').allRecords.filter (rec) -> rec.index < start or rec.index >= end
+    test = base.store('articles').allRecords.filter (rec) -> rec.index >= start and rec.index < end
     start = end
     end += testSize
     result.push [tr, test]
@@ -109,26 +116,32 @@ makeTarget = (ts, cat) ->
     if cat in rec.categories
       1                         #true
     else
-      0)                        #false
+      -1)                        #false
   return qm.la.Vector(target)
 
 crossValidation = (base, folds, category) ->
   trainTestSets = makeTrainTestSets base, folds
   results = {tp: 0, fp: 0, tn: 0, fn: 0}
   for [ts, vs] in trainTestSets
-    SVC = new qm.analytics.SVC({ c:1, maxTime: 5 })
-    SVC.fit(featureSpace.extractSparseMatrix(ts),
+    SVC = new qm.analytics.SVC({maxTime: 30})
+    SVC.fit(feature_space.extractSparseMatrix(ts),
             makeTarget(ts, category))
+    console.log (w for w in SVC.weights)
     vs.each((rec) ->
-      sparseVector = featureSpace.extractSparseVector({ text: rec.text })
+      sparseVector = feature_space.extractSparseVector({ text: rec.text })
       y = SVC.predict(sparseVector)
+      console.log (c for c in rec.categories), y
       if (category in rec.categories) and y == 1 #true positive
-        results['tp'] += 1
-      else if (category in rec.categories) and y == 0 #false negative
-        results['fn'] += 1
+        ++results['tp']
+        console.log 'tp', '\n'
+      else if (category in rec.categories) and y == -1 #false negative
+        ++results['fn']
+        console.log 'fn', '\n'
       else if y == 1            #false positive
-        results['fp'] += 1
+        ++results['fp']
+        console.log 'fp', '\n'
       else                      #true negative
-        results['tn'] += 1
+        ++results['tn']
+        console.log 'tn', '\n')
   return results
         
