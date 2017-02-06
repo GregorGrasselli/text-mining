@@ -9,7 +9,6 @@ base = new qm.Base(
        fields: [
         { name: 'text', type: 'string' },
         { name: 'id', type: 'int' },
-        { name: 'index', primary: true, type: 'int' },
         { name: 'categories', type: 'string_v' }
         ]},
     ]
@@ -28,10 +27,8 @@ create_categories = (cats) ->
 
 
 result = []
-index = 0
 while (match = extraction_regex.exec(data))
-  result.push {id: parseInt(match[1]), categories: create_categories(match[2]), text: match[match.length - 1], index: index}
-  ++index
+  result.push {id: parseInt(match[1]), categories: create_categories(match[2]), text: match[match.length - 1]}
 
 fs.unlinkSync('json_lines_dataset.txt')
 for i in result
@@ -103,8 +100,8 @@ makeTrainTestSets = (base, folds) ->
   end = start + testSize
   result = []
   while end <= l
-    tr= base.store('articles').allRecords.filter (rec) -> rec.index < start or rec.index >= end
-    test = base.store('articles').allRecords.filter (rec) -> rec.index >= start and rec.index < end
+    tr= base.store('articles').allRecords.filter (rec) -> rec.$id < start or rec.$id >= end
+    test = base.store('articles').allRecords.filter (rec) -> rec.$id >= start and rec.$id < end
     start = end
     end += testSize
     result.push [tr, test]
