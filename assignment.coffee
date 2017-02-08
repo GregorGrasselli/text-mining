@@ -6,10 +6,9 @@ base = new qm.Base(
     mode: 'createClean',
     schema: [
       {name: 'articles',
-       fields: [
+      fields: [
         { name: 'text', type: 'string' },
         { name: 'id', type: 'int' },
-        { name: 'index', primary: true, type: 'int' },
         { name: 'categories', type: 'string_v' }
         ]},
     ]
@@ -28,10 +27,8 @@ create_categories = (cats) ->
 
 
 result = []
-index = 0
 while (match = extraction_regex.exec(data))
-  result.push {id: parseInt(match[1]), categories: create_categories(match[2]), text: match[match.length - 1], index: index}
-  ++index
+  result.push {id: parseInt(match[1]), categories: create_categories(match[2]), text: match[match.length - 1]}
 
 fs.unlinkSync('json_lines_dataset.txt')
 for i in result
@@ -41,17 +38,17 @@ n_articles = base.store("articles").loadJson "json_lines_dataset.txt"
 
 feature_space_args = {
     type: 'text', source: 'articles', field: 'text',
-    weight: 'tfidf', # none, tf, idf, tfidf
+    weight: 'none', # none, tf, idf, tfidf
     tokenizer: {
         type: 'simple',
-        stopwords: 'en', # none, en, [...]
-        stemmer: 'porter' # porter, none
+        stopwords: 'none', # none, en, [...]
+        stemmer: 'none' # porter, none
     },
-    ngrams: 2,
     normalize: true
 }
 
 feature_space = new qm.FeatureSpace(base, feature_space_args)
+feature_space.updateRecords base.store('articles').allRecords
 
 listAllCategories = (base) ->
   categories = {}
@@ -103,8 +100,8 @@ makeTrainTestSets = (base, folds) ->
   end = start + testSize
   result = []
   while end <= l
-    tr= base.store('articles').allRecords.filter (rec) -> rec.index < start or rec.index >= end
-    test = base.store('articles').allRecords.filter (rec) -> rec.index >= start and rec.index < end
+    tr= base.store('articles').allRecords.filter (rec) -> rec.$id < start or rec.$id >= end
+    test = base.store('articles').allRecords.filter (rec) -> rec.$id >= start and rec.$id < end
     start = end
     end += testSize
     result.push [tr, test]
@@ -144,4 +141,3 @@ crossValidation = (base, folds, category) ->
         ++results['tn']
         console.log 'tn', '\n')
   return results
-        
