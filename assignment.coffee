@@ -93,8 +93,16 @@ listAllCategories = (base) ->
 
 # training and validation set
 
-makeValidationSet = (recordSet, validationSetSize, options) ->
-  # make a validation set and then subtract it from everything to get a training set
+# validationSetSize ∈ (0, 1) is the appoximate part of the recordSet
+# to use for validation
+# returns a 2 element array. the training set is first, the validation
+# set second
+makeVTSets = (recordSet, validationSetSize) ->
+  total = recordSet.length
+  n = Math.round(total * validationSetSize)
+  vs = recordSet.sample n
+  ts = recordSet.setDiff vs
+  return [ts, vs]
 
 
 
@@ -106,11 +114,14 @@ makeTrainTestSets = (trainTest, folds) ->
   testSize = Math.round(l / folds)
   start = 0
   end = start + testSize
-  trainTestIds = (r.$id for r in trainTest).sort()
+  trainTestIds = (r.$id for r in trainTest)
+  console.log trainTest
   result = []
   while end <= l
-    tr= base.store('articles').allRecords.filter (rec) -> rec.$id < trainTestIds[start] or rec.$id >= trainTestIds[end]
-    test = base.store('articles').allRecords.filter (rec) -> rec.$id >= trainTestIds[start] and rec.$id < trainTestIds[end]
+    tt = trainTest.clone()
+    tr = tt.filter (rec) -> (rec.$id in trainTestIds[start...end])
+    ts = trainTest.clone()
+    test = ts.setDiff tr
     start = end
     end += testSize
     result.push [tr, test]
@@ -125,31 +136,37 @@ makeTarget = (ts, cat) ->
       -1)                        #false
   return qm.la.Vector(target)
 
-crossValidation = (trainTestSet, folds, category, modelParams) ->
+trainModel = (base, trainingSet, modelParams, fsArgs, category) ->
+  features = new qm.FeatureSpace base, fsArgs
+  features.updateRecords trainingSet
+  SVC = new qm.analytics.SVC(modelParams)
+  SVC.fit(features.extractSparseMatrix(trainingSet),
+          makeTarget(trainingSet, category))
+  return [SVC, features]
+
+evaluateSVC = (SVC, featureSpace, testSet, category) ->
+  predictions = SVC.predict featureSpace.extractSparseMatrix(testSet)
+  trueTarget = makeTarget testSet, category
+  results = {tp: 0, fp: 0, tn: 0, fn: 0}
+  for i in [0...trueTarget.length]
+    if (predictions[i] == trueTarget[i])
+      switch predictions[i]
+        when 1 then ++results['tp']
+        when -1 then ++results['tn']
+    else
+      switch predictions[i]
+        when 1 then ++results['fp']
+        when -1 then ++results['fn']
+  return results
+
+
+crossValidation = (base, trainTestSet, folds, category, modelParams, fsArgs) ->
   trainTestSets = makeTrainTestSets trainTestSet, folds
   results = {tp: 0, fp: 0, tn: 0, fn: 0}
   for [ts, vs] in trainTestSets
-    SVC = new qm.analytics.SVC(modelParams)
-    SVC.fit(feature_space.extractSparseMatrix(ts),
-            makeTarget(ts, category))
+    [SVC, features] = trainModel base, ts, modelParams, fsArgs, category
     #console.log (w for w in SVC.weights)
-    vs.each((rec) ->
-      sparseVector = feature_space.extractSparseVector({ text: rec.text })
-      y = SVC.predict(sparseVector)
-      #console.log (c for c in rec.categories), y
-      if (category in rec.categories) and y == 1 #true positive
-        ++results['tp']
-        # console.log 'tp', '\n'
-      else if (category in rec.categories) and y == -1 #false negative
-        ++results['fn']
-        # console.log 'fn', '\n'
-      else if y == 1            #false positive
-        ++results['fp']
-        #console.log 'fp', '\n'
-      else                      #true negative
-        ++results['tn']
-        # console.log 'tn', '\n'
-        )
+    results = evaluateSVC SVC, features, vs, category
   return results
 
 
@@ -159,13 +176,141 @@ precisionAndRecall = (resultsMap) ->
   return { precision: precision, recall: recall}
 
 trainModelAllData = (base, category, modelParams, featureSpaceParams) ->
-  SVC = new qm.analytics.SVC modelParams
-  allArticles = base.store('articles').allRecords
-  features = new qm.FeatureSpace base, featureSpaceParams
-  features.updateRecords allArticles
-  SVC.fit(features.extractSparseMatrix(allArticles),
-          makeTarget(allArticles, category))
-  return SVC
+  trainModel base, base.store('articles').allRecords, modelParams, featureSpaceParams
+
+tryModelParams = (records, category, paramsToTry, folds) ->
+  results = []
+  for [features, modelParams] in paramsToTry
+    rdesc = {features: features, modelParams: modelParams}
+    cvResults = crossValidation base, records, folds, category, modelParams, features
+    rdesc['cvResults'] = cvResults
+    pr = precisionAndRecall cvResults
+    rdesc['precision'] = pr['precision']
+    rdesc['recall'] = pr['recall']
+    results.push rdesc
+  results.sort (a, b) -> b.recall - a.recall #sort in descending order
+  return {category: category, folds: folds, results: results}
+
+validateResults = (base, trainingSet, validationSet, modelParams, features, category) ->
+  [SVC, features] = trainModel base, trainingSet, modelParams, features, category
+  return evaluateSVC SVC, features, validationSet, category
+
+
+featureSpaceParams = [
+  {
+    type: 'text', source: 'articles', field: 'text',
+    weight: 'none', # none, tf, idf, tfidf
+    tokenizer: {
+      type: 'simple',
+      stopwords: 'none', # none, en, [...]
+      stemmer: 'none' # porter, none
+    },
+    normalize: true
+  },
+  {
+    type: 'text', source: 'articles', field: 'text',
+    weight: 'tfidf', # none, tf, idf, tfidf
+    tokenizer: {
+      type: 'simple',
+      stopwords: 'en', # none, en, [...]
+      stemmer: 'porter' # porter, none
+    },
+    normalize: true
+  },
+  {
+    type: 'text', source: 'articles', field: 'text',
+    weight: 'tfidf', # none, tf, idf, tfidf
+    tokenizer: {
+      type: 'simple',
+      stopwords: 'en', # none, en, [...]
+      stemmer: 'porter' # porter, none
+    },
+    ngrams: 2
+    normalize: true
+  },
+  {
+    type: 'text', source: 'articles', field: 'text',
+    weight: 'idf', # none, tf, idf, tfidf
+    tokenizer: {
+      type: 'simple',
+      stopwords: 'en', # none, en, [...]
+      stemmer: 'porter' # porter, none
+    },
+    normalize: true
+  },
+  {
+    type: 'text', source: 'articles', field: 'text',
+    weight: 'tfidf', # none, tf, idf, tfidf
+    tokenizer: {
+      type: 'simple',
+      stopwords: 'en', # none, en, [...]
+      stemmer: 'none' # porter, none
+    },
+    normalize: true
+  },
+  {
+    type: 'text', source: 'articles', field: 'text',
+    weight: 'tfidf', # none, tf, idf, tfidf
+    tokenizer: {
+      type: 'simple',
+      stopwords: 'none', # none, en, [...]
+      stemmer: 'porter' # porter, none
+    },
+    normalize: true
+  },
+  {
+    type: 'text', source: 'articles', field: 'text',
+    weight: 'tf', # none, tf, idf, tfidf
+    tokenizer: {
+      type: 'simple',
+      stopwords: 'en', # none, en, [...]
+      stemmer: 'porter' # porter, none
+    },
+    normalize: true
+  }]
+
+svcParams = (cmin, cmax, jmin, jmax, cjby) ->
+  result = []
+  for c in [Math.round(cmin/cjby)..Math.round(cmax/cjby)]
+    for j in [Math.round(jmin/cjby)..Math.round(jmax/cjby)]
+      result.push {maxTime: 30, c: c*cjby, j: j*cjby, verbose: false}
+  result
+
+#results as returned by tryModelParams
+writeResults = (results, now) ->
+  fname = 'results-' + results.category + '-' + now + '.json'
+  fs.writeFileSync fname, JSON.stringify(results, null, 2)
+
+mergeParams = (cmin, cmax, jmin, jmax, cjby, fsArgs) ->
+  r = []
+  for f in fsArgs
+    for cj in svcParams cmin, cmax, jmin, jmax, cjby
+      r.push [f, cj]
+  return r
+
+writeValidationSet = (vs, now, category) ->
+  fname = 'validation-set-' + category + '-' + now + '.json'
+  fs.writeFileSync fname, vs.toJSON()
+
+writeValidationResults = (vr, now, cat) ->
+  fname = 'validation-results-' + cat + '-' + now +'.json'
+  fs.writeFileSync fname JSON.stringify(vr, null, 2)
+
+runParameterOpt = (category, validationSetSize) ->
+  [ts, vs] = makeVTSets base.store('articles').allRecords, validationSetSize
+  now = new Date()
+  now = now.toISOString()
+  writeValidationSet vs, now, category
+  params = mergeParams(0.8, 1.4, 0.9, 1.5, 0.1, featureSpaceParams)
+  results = tryModelParams ts, category, params, 10
+  writeResults results, now
+  best = results.results[0]
+  bestModel = best.modelParams
+  bestFestures = best.features
+  validationResults = validateResults base, ts, vs, bestModel, bestFeatures, category
+  pr = precisionAndRecall validationRecall
+  writeValidationResults [validationResults, pr, bestModel, bestFeatures], now, category
+  return [validationResults, pr, bestModel, bestFeatures]
 
 # feature_space_args = {
 #     type: 'text', source: 'articles', field: 'text',
