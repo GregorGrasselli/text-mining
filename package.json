@@ -1,5 +1,5 @@
 {
-    'name': "text-mining-assignment",
-    'version': '1.0',
-    'dependencies': ['qminer']
+    "name": "text-mining-assignment",
+    "version": "1.0",
+    "dependencies": ["qminer"]
 }
