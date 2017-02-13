@@ -306,7 +306,7 @@ runParameterOpt = (category, validationSetSize) ->
   writeResults results, now
   best = results.results[0]
   bestModel = best.modelParams
-  bestFestures = best.features
+  bestFeatures = best.features
   validationResults = validateResults base, ts, vs, bestModel, bestFeatures, category
   pr = precisionAndRecall validationRecall
   writeValidationResults [validationResults, pr, bestModel, bestFeatures], now, category
