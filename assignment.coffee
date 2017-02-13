@@ -2,6 +2,7 @@ qm = require('qminer')
 #loader = require('qminer-data-loader')
 fs = require 'fs'
 
+
 base = new qm.Base(
     mode: 'createClean',
     schema: [
@@ -278,7 +279,7 @@ svcParams = (cmin, cmax, jmin, jmax, cjby) ->
 
 #results as returned by tryModelParams
 writeResults = (results, now) ->
-  fname = 'results-' + results.category + '-' + now + '.json'
+  fname = 'cv-results-' + results.category + '-' + now + '.json'
   fs.writeFileSync fname, JSON.stringify(results, null, 2)
 
 mergeParams = (cmin, cmax, jmin, jmax, cjby, fsArgs) ->
